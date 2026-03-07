@@ -108,7 +108,7 @@ async function main() {
       monthlyPrice: 1190,
       yearlyPrice: 13000,
       maxUsers: 1000,
-      additionalUserPrice: null,
+      additionalUserPrice: 15,
       features: [
         { text: 'Full enterprise access to all LMS content and The Vault', included: true },
         { text: 'Basic enterprise dashboard and centralized account management', included: true },
