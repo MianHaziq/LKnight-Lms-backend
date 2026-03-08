@@ -5,10 +5,14 @@ const {
   getRevenueChart,
   getUserGrowthChart,
   getRecentEnrollments,
+  getRecentSubscriptions,
+  getSubscriptionsList,
   getTopCourses,
   getAnalyticsOverview,
   getEnrollmentsByCourse,
   getRevenueByCategory,
+  getRevenueByPlan,
+  getSubscriptionsByPlan,
   getEnrollmentChart,
 } = require('../controllers/dashboard.controller');
 const { verifyAdmin } = require('../middleware/auth');
@@ -112,6 +116,51 @@ router.get('/recent-enrollments', getRecentEnrollments);
 
 /**
  * @swagger
+ * /api/admin/dashboard/recent-subscriptions:
+ *   get:
+ *     summary: Get recent plan subscriptions (for dashboard widget)
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 5
+ *     responses:
+ *       200:
+ *         description: Recent subscriptions with user, plan, billing, amount
+ */
+router.get('/recent-subscriptions', getRecentSubscriptions);
+
+/**
+ * @swagger
+ * /api/admin/dashboard/subscriptions:
+ *   get:
+ *     summary: Get subscriptions list with pagination
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *     responses:
+ *       200:
+ *         description: Subscriptions list with pagination
+ */
+router.get('/subscriptions', getSubscriptionsList);
+
+/**
+ * @swagger
  * /api/admin/dashboard/top-courses:
  *   get:
  *     summary: Get top performing courses by revenue
@@ -179,7 +228,7 @@ router.get('/analytics/enrollments-by-course', getEnrollmentsByCourse);
  * @swagger
  * /api/admin/analytics/revenue-by-category:
  *   get:
- *     summary: Get revenue by category (for pie chart)
+ *     summary: Get revenue by category (legacy pie chart)
  *     tags: [Analytics]
  *     security:
  *       - bearerAuth: []
@@ -188,6 +237,53 @@ router.get('/analytics/enrollments-by-course', getEnrollmentsByCourse);
  *         description: Revenue by category data
  */
 router.get('/analytics/revenue-by-category', getRevenueByCategory);
+
+/**
+ * @swagger
+ * /api/admin/analytics/revenue-by-plan:
+ *   get:
+ *     summary: Get revenue by plan (for pie chart, plan-based flow)
+ *     tags: [Analytics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: period
+ *         schema:
+ *           type: string
+ *           enum: [7d, 30d, 90d, 12m, all]
+ *           default: all
+ *     responses:
+ *       200:
+ *         description: Revenue by plan data
+ */
+router.get('/analytics/revenue-by-plan', getRevenueByPlan);
+
+/**
+ * @swagger
+ * /api/admin/analytics/subscriptions-by-plan:
+ *   get:
+ *     summary: Get subscription counts by plan and billing cycle (Enrollments by Plans)
+ *     tags: [Analytics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: period
+ *         schema:
+ *           type: string
+ *           enum: [7d, 30d, 90d, 12m, all]
+ *           default: all
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Subscriptions by plan (label + value)
+ */
+router.get('/analytics/subscriptions-by-plan', getSubscriptionsByPlan);
 
 /**
  * @swagger
