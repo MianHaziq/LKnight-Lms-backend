@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const prisma = require('../config/db');
 const { verifyToken, verifyAdmin } = require('../middleware/auth');
 const { userHasActiveSubscription } = require('../controllers/subscription.controller');
 const {
@@ -15,6 +16,18 @@ const {
 
 const requirePaidOrTrial = async (req, res, next) => {
   try {
+    // Admins can always watch live stream (e.g. to verify it works)
+    let isAdmin = req.userRole === 'ADMIN';
+    if (!isAdmin && req.userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: req.userId },
+        select: { role: true },
+      });
+      isAdmin = user?.role === 'ADMIN';
+    }
+    if (isAdmin) {
+      return next();
+    }
     const hasAccess = await userHasActiveSubscription(req.userId);
     if (!hasAccess) {
       return res.status(403).json({
