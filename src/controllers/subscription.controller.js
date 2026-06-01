@@ -883,6 +883,417 @@ const removeTeamMember = async (req, res, next) => {
   }
 };
 
+/* ============================================================
+ * SHAREABLE INVITE LINK (anyone-with-the-link joins)
+ * Coexists with the per-email SubscriptionInvitation flow above.
+ * ============================================================ */
+
+// Allowed expiration windows for the share link.
+const INVITE_LINK_EXPIRATION_PRESETS = {
+  '1d': 1 * 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  never: null,
+};
+
+function buildInviteLinkUrl(token) {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  return `${frontendUrl}/join/${token}`;
+}
+
+function serializeInviteLink(link) {
+  if (!link) return null;
+  return {
+    id: link.id,
+    token: link.token,
+    url: buildInviteLinkUrl(link.token),
+    isActive: link.isActive,
+    maxUses: link.maxUses,
+    usedCount: link.usedCount,
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt,
+  };
+}
+
+async function getActiveSeatUsage(subscriptionId) {
+  const [memberCount, pendingCount] = await Promise.all([
+    prisma.subscriptionMember.count({ where: { subscriptionId } }),
+    prisma.subscriptionInvitation.count({
+      where: { subscriptionId, expiresAt: { gt: new Date() } },
+    }),
+  ]);
+  // Owner counts as 1.
+  return 1 + memberCount + pendingCount;
+}
+
+/**
+ * @desc    Create (or rotate) the subscription's share link.
+ * @route   POST /api/subscriptions/:id/invite-link
+ * @access  Subscription Owner
+ */
+const createInviteLink = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const { id } = req.params;
+    const { expiresIn, maxUses } = req.body || {};
+
+    const subscription = await prisma.subscription.findUnique({ where: { id } });
+    if (!subscription || subscription.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only the subscription owner can manage invite links.',
+      });
+    }
+
+    if (subscription.maxUsers <= 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Share links are only available on team plans.',
+      });
+    }
+
+    if (!['ACTIVE', 'TRIALING'].includes(subscription.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot create a share link for an inactive subscription.',
+      });
+    }
+
+    const expiresKey = expiresIn || '7d';
+    if (!Object.prototype.hasOwnProperty.call(INVITE_LINK_EXPIRATION_PRESETS, expiresKey)) {
+      return res.status(400).json({
+        success: false,
+        message: 'expiresIn must be one of: 1d, 7d, 30d, never',
+      });
+    }
+    const expiresMs = INVITE_LINK_EXPIRATION_PRESETS[expiresKey];
+    const expiresAt = expiresMs ? new Date(Date.now() + expiresMs) : null;
+
+    let parsedMaxUses = null;
+    if (maxUses !== undefined && maxUses !== null && maxUses !== '') {
+      const n = Number(maxUses);
+      if (!Number.isInteger(n) || n < 1 || n > 1000) {
+        return res.status(400).json({
+          success: false,
+          message: 'maxUses must be an integer between 1 and 1000 (or omitted for unlimited).',
+        });
+      }
+      parsedMaxUses = n;
+    }
+
+    // Rotating: deactivate any prior links so we keep exactly one active link.
+    // This is a "regenerate" — the old URL stops working.
+    await prisma.subscriptionInviteLink.updateMany({
+      where: { subscriptionId: id, isActive: true },
+      data: { isActive: false },
+    });
+
+    const token = crypto.randomBytes(24).toString('base64url');
+    const link = await prisma.subscriptionInviteLink.create({
+      data: {
+        subscriptionId: id,
+        createdById: userId,
+        token,
+        expiresAt,
+        maxUses: parsedMaxUses,
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Invite link created.',
+      data: serializeInviteLink(link),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Get the subscription's current share link (active one, if any).
+ * @route   GET /api/subscriptions/:id/invite-link
+ * @access  Subscription Owner
+ */
+const getInviteLink = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const { id } = req.params;
+
+    const subscription = await prisma.subscription.findUnique({ where: { id } });
+    if (!subscription || subscription.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only the subscription owner can manage invite links.',
+      });
+    }
+
+    const link = await prisma.subscriptionInviteLink.findFirst({
+      where: { subscriptionId: id, isActive: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: link ? serializeInviteLink(link) : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Revoke the share link.
+ * @route   DELETE /api/subscriptions/:id/invite-link
+ * @access  Subscription Owner
+ */
+const revokeInviteLink = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const { id } = req.params;
+
+    const subscription = await prisma.subscription.findUnique({ where: { id } });
+    if (!subscription || subscription.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only the subscription owner can manage invite links.',
+      });
+    }
+
+    const result = await prisma.subscriptionInviteLink.updateMany({
+      where: { subscriptionId: id, isActive: true },
+      data: { isActive: false },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: result.count > 0 ? 'Invite link revoked.' : 'No active invite link to revoke.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Public preview of a share link (so the /join page can show org/inviter
+ *          info before signup). Does not require auth.
+ * @route   GET /api/subscriptions/invite-link/preview/:token
+ * @access  Public
+ */
+const previewInviteLink = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token is required.' });
+    }
+
+    const link = await prisma.subscriptionInviteLink.findUnique({
+      where: { token },
+      include: {
+        subscription: {
+          include: {
+            plan: { select: { name: true } },
+            user: { select: { firstName: true, lastName: true } },
+          },
+        },
+        createdBy: { select: { firstName: true, lastName: true } },
+      },
+    });
+
+    // Preview is intentionally tolerant — always returns 200 so the public /join
+    // page can render a friendly state for each failure mode.
+    if (!link) {
+      return res.status(200).json({
+        success: false,
+        status: 'invalid',
+        message: 'This invite link is invalid.',
+      });
+    }
+
+    if (!link.isActive) {
+      return res.status(200).json({
+        success: false,
+        status: 'revoked',
+        message: 'This invite link has been revoked.',
+      });
+    }
+
+    if (link.expiresAt && link.expiresAt < new Date()) {
+      return res.status(200).json({
+        success: false,
+        status: 'expired',
+        message: 'This invite link has expired.',
+      });
+    }
+
+    if (link.maxUses !== null && link.usedCount >= link.maxUses) {
+      return res.status(200).json({
+        success: false,
+        status: 'exhausted',
+        message: 'This invite link has reached its maximum uses.',
+      });
+    }
+
+    const sub = link.subscription;
+    const subActive =
+      ['ACTIVE', 'TRIALING'].includes(sub.status) &&
+      (!sub.currentPeriodEnd || sub.currentPeriodEnd > new Date());
+    if (!subActive) {
+      return res.status(200).json({
+        success: false,
+        status: 'subscription_inactive',
+        message: "This team's subscription is no longer active.",
+      });
+    }
+
+    const seatsUsed = await getActiveSeatUsage(sub.id);
+    if (seatsUsed >= sub.maxUsers) {
+      return res.status(200).json({
+        success: false,
+        status: 'full',
+        message: 'This team has reached its member limit.',
+      });
+    }
+
+    const inviterFirst =
+      link.createdBy?.firstName || sub.user?.firstName || null;
+
+    return res.status(200).json({
+      success: true,
+      status: 'valid',
+      data: {
+        organizationName: sub.organizationName || null,
+        planName: sub.plan?.name || null,
+        inviterFirstName: inviterFirst,
+        seatsRemaining: sub.maxUsers - seatsUsed,
+        expiresAt: link.expiresAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Redeem a share link — logged-in user joins the subscription.
+ * @route   POST /api/subscriptions/invite-link/redeem
+ * @access  Logged-in User
+ */
+const redeemInviteLink = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const { token } = req.body || {};
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token is required.' });
+    }
+
+    // Single transaction so seat-race + usedCount stay consistent.
+    const result = await prisma.$transaction(async (tx) => {
+      const link = await tx.subscriptionInviteLink.findUnique({
+        where: { token },
+        include: { subscription: true },
+      });
+
+      if (!link) return { status: 'invalid', message: 'This invite link is invalid.' };
+      if (!link.isActive) return { status: 'revoked', message: 'This invite link has been revoked.' };
+      if (link.expiresAt && link.expiresAt < new Date()) {
+        return { status: 'expired', message: 'This invite link has expired.' };
+      }
+      if (link.maxUses !== null && link.usedCount >= link.maxUses) {
+        return { status: 'exhausted', message: 'This invite link has reached its maximum uses.' };
+      }
+
+      const sub = link.subscription;
+      const subActive =
+        ['ACTIVE', 'TRIALING'].includes(sub.status) &&
+        (!sub.currentPeriodEnd || sub.currentPeriodEnd > new Date());
+      if (!subActive) {
+        return {
+          status: 'subscription_inactive',
+          message: "This team's subscription is no longer active.",
+        };
+      }
+
+      // Owner can't join their own team.
+      if (sub.userId === userId) {
+        return {
+          status: 'is_owner',
+          message: 'You are the owner of this team — you already have full access.',
+        };
+      }
+
+      // Idempotent: already a member? Treat as success.
+      const existingMember = await tx.subscriptionMember.findUnique({
+        where: { userId_subscriptionId: { userId, subscriptionId: sub.id } },
+      });
+      if (existingMember) {
+        return {
+          status: 'already_member',
+          message: 'You already have access to this team.',
+          data: { subscriptionId: sub.id },
+        };
+      }
+
+      // Re-check seats inside the transaction to defeat races.
+      const [memberCount, pendingCount] = await Promise.all([
+        tx.subscriptionMember.count({ where: { subscriptionId: sub.id } }),
+        tx.subscriptionInvitation.count({
+          where: { subscriptionId: sub.id, expiresAt: { gt: new Date() } },
+        }),
+      ]);
+      const seatsUsed = 1 + memberCount + pendingCount;
+      if (seatsUsed >= sub.maxUsers) {
+        return { status: 'full', message: 'This team has reached its member limit.' };
+      }
+
+      await tx.subscriptionMember.create({
+        data: { userId, subscriptionId: sub.id, role: 'member' },
+      });
+      await tx.subscriptionInviteLink.update({
+        where: { id: link.id },
+        data: { usedCount: { increment: 1 } },
+      });
+
+      // If a pending email-invite exists for this user's email on this sub, clean it up.
+      const userRow = await tx.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      });
+      if (userRow?.email) {
+        await tx.subscriptionInvitation
+          .deleteMany({
+            where: { subscriptionId: sub.id, email: userRow.email.toLowerCase() },
+          })
+          .catch(() => {});
+      }
+
+      return {
+        status: 'joined',
+        message: 'You have joined the team. Welcome!',
+        data: { subscriptionId: sub.id },
+      };
+    });
+
+    // Always 200 — the `status` field is the source of truth so the client can
+    // render specific UI per outcome without parsing error messages.
+    return res.status(200).json({
+      success: ['joined', 'already_member'].includes(result.status),
+      status: result.status,
+      message: result.message,
+      data: result.data,
+    });
+  } catch (error) {
+    // Unique-constraint races (two simultaneous joins of the same user) — treat as already_member.
+    if (error && error.code === 'P2002') {
+      return res.status(200).json({
+        success: true,
+        status: 'already_member',
+        message: 'You already have access to this team.',
+      });
+    }
+    next(error);
+  }
+};
+
 module.exports = {
   userHasActiveSubscription,
   createSubscriptionCheckout,
@@ -894,4 +1305,9 @@ module.exports = {
   addTeamMember,
   acceptInvite,
   removeTeamMember,
+  createInviteLink,
+  getInviteLink,
+  revokeInviteLink,
+  previewInviteLink,
+  redeemInviteLink,
 };

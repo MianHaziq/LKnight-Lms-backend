@@ -10,6 +10,11 @@ const {
   addTeamMember,
   acceptInvite,
   removeTeamMember,
+  createInviteLink,
+  getInviteLink,
+  revokeInviteLink,
+  previewInviteLink,
+  redeemInviteLink,
 } = require('../controllers/subscription.controller');
 const { verifyToken } = require('../middleware/auth');
 
@@ -159,5 +164,21 @@ router.post('/:id/members', verifyToken, addTeamMember);
  *         description: Team member removed
  */
 router.delete('/:id/members/:memberId', verifyToken, removeTeamMember);
+
+/* ============================================================
+ * Shareable invite link routes
+ * ============================================================ */
+
+// Public preview — must be a literal path, before the parameterised owner routes,
+// so the router doesn't shadow it.
+router.get('/invite-link/preview/:token', previewInviteLink);
+
+// Logged-in user redeems a share link.
+router.post('/invite-link/redeem', verifyToken, redeemInviteLink);
+
+// Owner-only management.
+router.post('/:id/invite-link', verifyToken, createInviteLink);
+router.get('/:id/invite-link', verifyToken, getInviteLink);
+router.delete('/:id/invite-link', verifyToken, revokeInviteLink);
 
 module.exports = router;

@@ -38,6 +38,7 @@ model User {
   subscriptions        Subscription[]
   subscriptionMembers  SubscriptionMember[]
   subscriptionInvitationsSent SubscriptionInvitation[]
+  subscriptionInviteLinksCreated SubscriptionInviteLink[]
 
   // Vault relations
   vaultDiscussions VaultDiscussion[] @relation("UserDiscussions")
@@ -265,6 +266,7 @@ model Subscription {
 
   members              SubscriptionMember[]
   invitations          SubscriptionInvitation[]
+  inviteLinks          SubscriptionInviteLink[]
 
   @@index([userId])
   @@index([planId])
@@ -309,6 +311,28 @@ model SubscriptionMember {
   @@unique([userId, subscriptionId])
   @@index([userId])
   @@index([subscriptionId])
+}
+
+model SubscriptionInviteLink {
+  id             String    @id @default(uuid())
+  token          String    @unique
+  isActive       Boolean   @default(true)
+  maxUses        Int?
+  usedCount      Int       @default(0)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  createdById    String
+  createdBy      User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([token])
+  @@index([isActive])
+  @@index([expiresAt])
 }
 
 // ============================================
