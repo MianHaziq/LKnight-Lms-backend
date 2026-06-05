@@ -8,6 +8,14 @@ const { sendTeamInvitationEmail } = require('../services/email.service');
  * Shared utility used by both subscription and enrollment controllers
  */
 const userHasActiveSubscription = async (userId) => {
+  // Admins always have permanent, full access — no subscription required.
+  // This is the single shared access gate used for courses, live streams and the vault.
+  const adminUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  if (adminUser?.role === 'ADMIN') return true;
+
   // Check direct subscription
   const directSub = await prisma.subscription.findFirst({
     where: {
@@ -349,11 +357,19 @@ const checkAccess = async (req, res, next) => {
   try {
     const userId = req.userId;
 
-    // Check accessAll flag
+    // Check role and accessAll flag
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { accessAll: true },
+      select: { role: true, accessAll: true },
     });
+
+    // Admins always have permanent, full access — no subscription required
+    if (user?.role === 'ADMIN') {
+      return res.status(200).json({
+        success: true,
+        data: { hasAccess: true, accessAll: true, isAdmin: true },
+      });
+    }
 
     if (user?.accessAll) {
       return res.status(200).json({

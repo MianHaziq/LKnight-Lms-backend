@@ -102,8 +102,9 @@ const getAllUsers = async (req, res, next) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
-    // Build where clause
-    const where = {};
+    // Build where clause.
+    // Admin accounts are never listed in the user-management table.
+    const where = { role: { not: 'ADMIN' } };
 
     if (search) {
       where.OR = [
@@ -113,7 +114,8 @@ const getAllUsers = async (req, res, next) => {
       ];
     }
 
-    if (role) {
+    // Allow filtering by role, but never override the admin exclusion
+    if (role && role.toUpperCase() !== 'ADMIN') {
       where.role = role.toUpperCase();
     }
 
@@ -279,6 +281,22 @@ const deleteUser = async (req, res, next) => {
       });
     }
 
+    // Admin accounts are protected and can never be deleted
+    if (user.role === 'ADMIN') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin accounts cannot be deleted.',
+      });
+    }
+
+    // An admin can never delete their own account
+    if (req.userId && req.userId === id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You cannot delete your own account.',
+      });
+    }
+
     await prisma.user.delete({
       where: { id },
     });
@@ -402,14 +420,15 @@ const changeUserRole = async (req, res, next) => {
  */
 const getUserStats = async (req, res, next) => {
   try {
+    // Admin accounts are excluded from these stats (they are not listed users)
     const [totalUsers, students, instructors, admins, activeUsers, inactiveUsers] =
       await Promise.all([
-        prisma.user.count(),
+        prisma.user.count({ where: { role: { not: 'ADMIN' } } }),
         prisma.user.count({ where: { role: 'STUDENT' } }),
         prisma.user.count({ where: { role: 'INSTRUCTOR' } }),
         prisma.user.count({ where: { role: 'ADMIN' } }),
-        prisma.user.count({ where: { status: 'ACTIVE' } }),
-        prisma.user.count({ where: { status: 'INACTIVE' } }),
+        prisma.user.count({ where: { role: { not: 'ADMIN' }, status: 'ACTIVE' } }),
+        prisma.user.count({ where: { role: { not: 'ADMIN' }, status: 'INACTIVE' } }),
       ]);
 
     res.status(200).json({

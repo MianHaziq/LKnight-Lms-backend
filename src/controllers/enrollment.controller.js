@@ -637,10 +637,10 @@ const getAllCoursesWithStatus = async (req, res, next) => {
   try {
     const userId = req.userId;
 
-    // Get user info including accessAll
+    // Get user info including role and accessAll
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { accessAll: true },
+      select: { role: true, accessAll: true },
     });
 
     if (!user) {
@@ -649,6 +649,9 @@ const getAllCoursesWithStatus = async (req, res, next) => {
         message: 'User not found',
       });
     }
+
+    // Admins always have permanent, full access — no subscription required
+    const isAdmin = user.role === 'ADMIN';
 
     // Get all published courses
     const courses = await prisma.course.findMany({
@@ -680,8 +683,9 @@ const getAllCoursesWithStatus = async (req, res, next) => {
 
     const enrollmentMap = new Map(enrollments.map((e) => [e.courseId, e]));
 
-    // Check if user has active subscription (for access to all courses)
-    const hasSubscription = await userHasActiveSubscription(userId);
+    // Check if user has active subscription (for access to all courses).
+    // Admins bypass this entirely — they always have full access.
+    const hasSubscription = isAdmin || (await userHasActiveSubscription(userId));
 
     // Transform courses with enrollment info
     const coursesWithStatus = courses.map((course) => {
@@ -710,7 +714,7 @@ const getAllCoursesWithStatus = async (req, res, next) => {
         enrollments: course._count.enrollments,
         // Access status (includes subscription check)
         isEnrolled: !!enrollment,
-        hasAccess: user.accessAll || !!enrollment || hasSubscription,
+        hasAccess: isAdmin || user.accessAll || !!enrollment || hasSubscription,
         enrollmentId: enrollment?.id || null,
         progress: enrollment?.progress || 0,
         enrolledAt: enrollment?.enrolledAt || null,
@@ -721,7 +725,7 @@ const getAllCoursesWithStatus = async (req, res, next) => {
       success: true,
       data: coursesWithStatus,
       count: coursesWithStatus.length,
-      accessAll: user.accessAll,
+      accessAll: isAdmin || user.accessAll,
     });
   } catch (error) {
     next(error);
@@ -779,8 +783,11 @@ const getCheckoutDetails = async (req, res, next) => {
     // Check if user already has access
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { accessAll: true },
+      select: { role: true, accessAll: true },
     });
+
+    // Admins always have permanent, full access — no subscription required
+    const isAdmin = user?.role === 'ADMIN';
 
     const enrollment = await prisma.enrollment.findUnique({
       where: {
@@ -818,7 +825,7 @@ const getCheckoutDetails = async (req, res, next) => {
           lessonCount: m._count.lessons,
         })),
         // User's access status (includes subscription check)
-        hasAccess: user.accessAll || !!enrollment || await userHasActiveSubscription(userId),
+        hasAccess: isAdmin || user.accessAll || !!enrollment || await userHasActiveSubscription(userId),
         isEnrolled: !!enrollment,
         enrollmentId: enrollment?.id || null,
       },

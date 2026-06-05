@@ -99,12 +99,12 @@ const getDashboardStats = async (req, res, next) => {
     ] = await Promise.all([
       getSubscriptionRevenueForRange(startDate, nowForEnd),
       getSubscriptionRevenueForRange(previousStartDate, startDate),
-      // Users
+      // Users (admins are excluded from all dashboard user metrics)
       prisma.user.count({
-        where: { createdAt: { gte: startDate } },
+        where: { role: { not: 'ADMIN' }, createdAt: { gte: startDate } },
       }),
       prisma.user.count({
-        where: { createdAt: { gte: previousStartDate, lt: startDate } },
+        where: { role: { not: 'ADMIN' }, createdAt: { gte: previousStartDate, lt: startDate } },
       }),
       // Courses
       prisma.course.count({
@@ -134,7 +134,7 @@ const getDashboardStats = async (req, res, next) => {
     // Get all-time totals
     const [allTimeUsers, allTimeCourses, allTimeEnrollments, allTimeRevenue] =
       await Promise.all([
-        prisma.user.count(),
+        prisma.user.count({ where: { role: { not: 'ADMIN' } } }),
         prisma.course.count(),
         prisma.enrollment.count(),
         getAllTimeSubscriptionRevenue(),
@@ -235,6 +235,7 @@ const getUserGrowthChart = async (req, res, next) => {
 
       const users = await prisma.user.count({
         where: {
+          role: { not: 'ADMIN' },
           createdAt: {
             gte: startOfMonth,
             lte: endOfMonth,
@@ -442,7 +443,7 @@ const getAnalyticsOverview = async (req, res, next) => {
     ] = await Promise.all([
       getSubscriptionRevenueForRange(startDate, now),
       prisma.user.count({
-        where: { createdAt: { gte: startDate } },
+        where: { role: { not: 'ADMIN' }, createdAt: { gte: startDate } },
       }),
       prisma.enrollment.count({
         where: { enrolledAt: { gte: startDate } },
